@@ -3,9 +3,9 @@ import os
 import sys
 import weakref
 
-arch_str = 'x64Linux2.6gcc4.1.1' if sys.maxsize > 2**32 else 'i86Linux2.6gcc4.1.1'
-_ddscore_lib = ctypes.CDLL(os.path.join(os.environ['NDDSHOME'], 'lib', arch_str, 'libnddscore.so'), ctypes.RTLD_GLOBAL)
-_ddsc_lib = ctypes.CDLL(os.path.join(os.environ['NDDSHOME'], 'lib', arch_str, 'libnddsc.so'))
+arch_str = 'i86Win32VS2010'
+_ddscore_lib = ctypes.CDLL(os.path.join(os.environ['NDDSHOME'], 'lib', arch_str, 'nddscore.dll'), ctypes.RTLD_GLOBAL)
+_ddsc_lib = ctypes.CDLL(os.path.join(os.environ['NDDSHOME'], 'lib', arch_str, 'nddsc.dll'))
 
 # Error checkers
 
@@ -59,12 +59,10 @@ def check_true(result, func, arguments):
 def get(name, type):
     return ctypes.cast(getattr(_ddsc_lib, 'DDS_' + name), ctypes.POINTER(type)).contents
 
-@apply
 class DDSFunc(object):
     pass
 
-@apply
-class DDSType(object):
+class DDSType_(type):
     def __getattr__(self, attr):
         contents = type(attr, (ctypes.Structure,), {})
         
@@ -81,6 +79,9 @@ class DDSType(object):
         
         setattr(self, attr, contents)
         return contents
+
+class DDSType(metaclass=DDSType_):
+    pass
 
 DDSType.Topic._fields_ = [
     ('_as_Entity', ctypes.c_void_p),
@@ -223,14 +224,16 @@ _dyn_basic_types = {
     TCKind.CHAR: ('char', DDS_Char, None),
     TCKind.WCHAR: ('wchar', DDS_Wchar, None),
 }
-def _define_func((p, errcheck, restype, argtypes)):
+def _define_func(func_params):
+    (p, errcheck, restype, argtypes) = func_params
     f = getattr(_ddsc_lib, 'DDS_' + p)
     if errcheck is not None:
         f.errcheck = errcheck
     f.restype = restype
     f.argtypes = argtypes
     setattr(DDSFunc, p, f)
-map(_define_func, [
+	
+list(map(_define_func, [
     ('DomainParticipantFactory_get_instance', check_null, ctypes.POINTER(DDSType.DomainParticipantFactory), []),
     ('DomainParticipantFactory_create_participant', check_null, ctypes.POINTER(DDSType.DomainParticipant), [ctypes.POINTER(DDSType.DomainParticipantFactory), DDS_DomainId_t, ctypes.POINTER(DDSType.DomainParticipantQos), ctypes.POINTER(DDSType.DomainParticipantListener), DDS_StatusMask]),
     ('DomainParticipantFactory_delete_participant', check_code, DDS_ReturnCode_t, [ctypes.POINTER(DDSType.DomainParticipantFactory), ctypes.POINTER(DDSType.DomainParticipant)]),
@@ -261,10 +264,10 @@ map(_define_func, [
     ('DynamicData_new', check_null, ctypes.POINTER(DDSType.DynamicData), [ctypes.POINTER(DDSType.TypeCode), ctypes.POINTER(DDSType.DynamicDataProperty_t)]),
 ] + [
     ('DynamicData_get_' + func_name, check_code, DDS_ReturnCode_t, [ctypes.POINTER(DDSType.DynamicData), ctypes.POINTER(data_type), ctypes.c_char_p, DDS_DynamicDataMemberId])
-        for func_name, data_type, bounds in _dyn_basic_types.itervalues()
+        for func_name, data_type, bounds in _dyn_basic_types.values()
 ] + [
     ('DynamicData_set_' + func_name, check_code, DDS_ReturnCode_t, [ctypes.POINTER(DDSType.DynamicData), ctypes.c_char_p, DDS_DynamicDataMemberId, data_type])
-        for func_name, data_type, bounds  in _dyn_basic_types.itervalues()
+        for func_name, data_type, bounds  in _dyn_basic_types.values()
 ] + [
     ('DynamicData_get_string', check_code, DDS_ReturnCode_t, [ctypes.POINTER(DDSType.DynamicData), ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(DDS_UnsignedLong), ctypes.c_char_p, DDS_DynamicDataMemberId]),
     ('DynamicData_get_wstring', check_code, DDS_ReturnCode_t, [ctypes.POINTER(DDSType.DynamicData), ctypes.POINTER(ctypes.c_wchar_p), ctypes.POINTER(DDS_UnsignedLong), ctypes.c_char_p, DDS_DynamicDataMemberId]),
@@ -302,7 +305,7 @@ map(_define_func, [
     ('String_free', None, None, [ctypes.c_char_p]),
     
     ('Wstring_free', None, None, [ctypes.c_wchar_p]),
-])
+]))
 
 def write_into_dd_member(obj, dd, member_name=None, member_id=DDS_DYNAMIC_DATA_MEMBER_ID_UNSPECIFIED):
     tc = ctypes.POINTER(DDSType.TypeCode)()
@@ -338,9 +341,9 @@ def write_into_dd(obj, dd):
     if kind == TCKind.STRUCT:
         assert isinstance(obj, dict)
         tc = dd.get_type()
-        for i in xrange(tc.member_count(ex())):
+        for i in range(tc.member_count(ex())):
             name = tc.member_name(i, ex())
-            write_into_dd_member(obj[name], dd, member_name=name)
+            write_into_dd_member(obj[bytes.decode(name)], dd, member_name=name)
     elif kind == TCKind.ARRAY or kind == TCKind.SEQUENCE:
         assert isinstance(obj, list)
         for i, x in enumerate(obj):
@@ -390,13 +393,13 @@ def unpack_dd(dd):
     if kind == TCKind.STRUCT:
         obj = {}
         tc = dd.get_type()
-        for i in xrange(tc.member_count(ex())):
+        for i in range(tc.member_count(ex())):
             name = tc.member_name(i, ex())
             obj[name] = unpack_dd_member(dd, member_name=name)
         return obj
     elif kind == TCKind.ARRAY or kind == TCKind.SEQUENCE:
         obj = []
-        for i in xrange(dd.get_member_count()):
+        for i in range(dd.get_member_count()):
             obj.append(unpack_dd_member(dd, member_id=i+1))
         return obj
     else:
@@ -412,11 +415,11 @@ class Topic(object):
         self.data_type = data_type
         
         self._support = support = DDSFunc.DynamicDataTypeSupport_new(self.data_type._get_typecode(), get('DYNAMIC_DATA_TYPE_PROPERTY_DEFAULT', DDSType.DynamicDataTypeProperty_t))
-        self._support.register_type(self._dds._participant, self.data_type.name)
+        self._support.register_type(self._dds._participant, str.encode(self.data_type.name))
         
         self._topic = topic = self._dds._participant.create_topic(
-            self.name,
-            self.data_type.name,
+            str.encode(self.name),
+            str.encode(self.data_type.name),
             get('TOPIC_QOS_DEFAULT', DDSType.TopicQos),
             None,
             0,
@@ -445,7 +448,7 @@ class Topic(object):
             dds._publisher.delete_datawriter(writer)
             dds._subscriber.delete_datareader(reader)
             dds._participant.delete_topic(topic)
-            support.unregister_type(dds._participant, data_type.name)
+            #support.unregister_type(dds._participant, str.encode(data_type.name))
             support.delete()
             
             _refs.remove(ref)
@@ -477,7 +480,7 @@ class Topic(object):
             self._disable_listener()
     
     def _data_available_callback(self, listener_data, datareader):
-        for cb in self._callbacks.itervalues():
+        for cb in self._callbacks.values():
             cb()
     
     def send(self, msg):
@@ -549,7 +552,7 @@ class LibraryType(object):
         self._lib, self.name = lib, name
         del lib, name
         
-        assert self._get_typecode().name(ex()) == self.name
+        assert self._get_typecode().name(ex()) == str.encode(self.name)
     
     def _get_typecode(self):
         f = getattr(self._lib, self.name + '_get_typecode')
